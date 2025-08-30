@@ -2,16 +2,18 @@
 pragma solidity ^0.8.20;
 
 import {Script} from "../../node_modules/forge-std/src/Script.sol";
-import {LiskETHRestakeVaultFactory} from "../../contracts/liskEth/SymbioticLiskETHVaultProxyFactory.sol";
+import {SymbioticUSDCVaultProxyFactory} from "../../contracts/mainnetUSDC/SymboiticUSDCVaultProxyFactory.sol";
 
-contract CreateVaultFromFactory is Script {
-    function run(address factoryAddr, address owner, address feeRecipient, uint256 unlockTime)
-        external
-        returns (address vault)
-    {
+contract CreateUSDCVaultFromFactory is Script {
+    function run(
+        address factoryAddr,
+        address owner,
+        address operatorFeeRecipient,
+        uint256 unlockTime
+    ) external returns (address vault) {
         vm.startBroadcast();
-        vault = LiskETHRestakeVaultFactory(factoryAddr).createVault(
-            owner, feeRecipient, uint64(unlockTime)
+        vault = SymbioticUSDCVaultProxyFactory(factoryAddr).createVault(
+            owner, operatorFeeRecipient, uint64(unlockTime)
         );
         vm.stopBroadcast();
     }

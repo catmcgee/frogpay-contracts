@@ -1,30 +1,45 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "./SymbioticUSDCVaultProxy.sol";
+import {SymbioticUSDCVaultProxy} from "./SymbioticUSDCVaultProxy.sol";
 
-contract VaultFactory {
-  event VaultCreated(address indexed owner, address vault, address wsteth, address mellowVault, address weth, address feeRecipient, uint64 unlockTime);
+contract SymbioticUSDCVaultProxyFactory {
+  address public immutable USDC;
+  address public immutable SUSDE;
+  address public immutable RS_VAULT; 
 
-  address[] public allVaults;
-  mapping(address => address[]) public vaultsByOwner;
+  event VaultCreated(
+    address indexed owner,
+    address indexed operatorFeeRecipient,
+    uint64 unlockTime,
+    address vault
+  );
+
+  constructor(address _usdc, address _susde, address _rsVault) {
+    require(_usdc != address(0) && _susde != address(0) && _rsVault != address(0), "ZERO_ADDR");
+    USDC = _usdc;
+    SUSDE = _susde;
+    RS_VAULT = _rsVault;
+  }
 
   function createVault(
     address owner_,
-    address wsteth,
-    address mellowVault,
-    address weth,
-    address feeRecipient,
+    address operatorFeeRecipient,
     uint64  unlockTime
   ) external returns (address vault) {
-    vault = address(new SymbioticLiskETHOwnerOnlyVault(
-      owner_, wsteth, mellowVault, weth, feeRecipient, unlockTime
-    ));
-    allVaults.push(vault);
-    vaultsByOwner[owner_].push(vault);
-    emit VaultCreated(owner_, vault, wsteth, mellowVault, weth, feeRecipient, unlockTime);
-  }
+    require(owner_ != address(0) && operatorFeeRecipient != address(0), "ZERO_ADDR");
 
-  function allVaultsLength() external view returns (uint256) { return allVaults.length; }
-  function ownerVaultsLength(address owner_) external view returns (uint256) { return vaultsByOwner[owner_].length; }
+    vault = address(
+      new SymbioticUSDCVaultProxy(
+        owner_,
+        USDC,
+        SUSDE,
+        RS_VAULT,
+        operatorFeeRecipient, 
+        unlockTime
+      )
+    );
+
+    emit VaultCreated(owner_, operatorFeeRecipient, unlockTime, vault);
+  }
 }
