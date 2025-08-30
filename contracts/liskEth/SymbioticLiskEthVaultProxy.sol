@@ -55,27 +55,35 @@ abstract contract Ownable {
 }
 
 /**
- * Lisk ETH → wstETH → Mellow wstETH Vault (ERC-4626) restaking vault.
+ * Lisk ETH-> wstETH -> Mellow (ERC-4626). Anyone can contribute, only owner can withdraw
  */
-contract SymbioticLiskETHVaultProxy is Ownable, ReentrancyGuard {
-  IERC20   public immutable WSTETH;        
-  IERC4626 public immutable MELLOW_VAULT; 
-  IWETH    public immutable WETH;          
+contract SymbioticLiskEthVaultProxy is Ownable, ReentrancyGuard {
+  IERC20   public immutable WSTETH;
+  IERC4626 public immutable MELLOW_VAULT;
+  IWETH    public immutable WETH;
 
   address public feeRecipient;
-  uint16  public feeBps = 5000;            // 50% split
-  uint64  public unlockTime;               // time gate
-  bool    public withdrawalsEnabled;       // manual override
+  uint16  public feeBps = 5000;         // 50%
+  uint64  public unlockTime;
+  bool    public withdrawalsEnabled;
 
   mapping(address => bool) public isRouterAllowed;
-  mapping(address => uint256) public userShares;     // shares in ERC-4626 held by this contract, attributed per-user
-  mapping(address => uint256) public userPrincipal;  // total wstETH assets deposited (scaled down on partial withdraws)
+
+  // owner-only position
+  mapping(address => uint256) public userShares;     // only userShares[owner] is used
+  mapping(address => uint256) public userPrincipal;  // only userPrincipal[owner] is used (wstETH units)
+
+  // contributor accounting (wstETH units)
+  mapping(address => uint256) public contribPrincipal;
+  uint256 public totalContributed;
 
   event RouterAllowed(address router, bool allowed);
   event ParamsUpdated(address feeRecipient, uint16 feeBps, uint64 unlockTime, bool withdrawalsEnabled);
-  event DepositedETH(address indexed user, address router, uint256 ethIn, uint256 wstBought, uint256 sharesOut);
-  event DepositedWst(address indexed user, uint256 wstIn, uint256 sharesOut);
-  event WithdrawnToETH(address indexed user, uint256 sharesIn, uint256 ethUser, uint256 ethFee);
+
+  event Contributed(address indexed contributor, uint256 wstAmount, uint256 sharesCreditedToOwner);
+  event DepositedETH(address indexed contributor, address router, uint256 ethIn, uint256 wstBought, uint256 sharesOut);
+  event DepositedWst(address indexed contributor, uint256 wstIn, uint256 sharesOut);
+  event WithdrawnToETH(address indexed caller, uint256 sharesIn, uint256 ethOwner, uint256 ethFee);
 
   constructor(
     address _owner,
@@ -91,9 +99,9 @@ contract SymbioticLiskETHVaultProxy is Ownable, ReentrancyGuard {
     WETH = IWETH(_weth);
     feeRecipient = _feeRecipient;
     unlockTime = _unlockTime;
-    require(IERC20(_wsteth).approve(_mellowVault, type(uint256).max), "APPROVE_FAIL");
 
-  
+    // Approve vault to pull wstETH on deposit
+    require(IERC20(_wsteth).approve(_mellowVault, type(uint256).max), "APPROVE_FAIL");
   }
 
   // --- admin ---
@@ -114,9 +122,9 @@ contract SymbioticLiskETHVaultProxy is Ownable, ReentrancyGuard {
   }
 
   function resetMellowAllowance() external onlyOwner {
-  require(WSTETH.approve(address(MELLOW_VAULT), 0), "APPROVE_ZERO_FAIL");
-  require(WSTETH.approve(address(MELLOW_VAULT), type(uint256).max), "APPROVE_MAX_FAIL");
-    }
+    require(WSTETH.approve(address(MELLOW_VAULT), 0), "APPROVE_ZERO_FAIL");
+    require(WSTETH.approve(address(MELLOW_VAULT), type(uint256).max), "APPROVE_MAX_FAIL");
+  }
 
   // --- views ---
 
@@ -124,22 +132,26 @@ contract SymbioticLiskETHVaultProxy is Ownable, ReentrancyGuard {
     return withdrawalsEnabled || block.timestamp >= unlockTime;
   }
 
-  function currentAssetsOf(address user) public view returns (uint256 assets) {
-    uint256 sh = userShares[user];
+  function ownerShares() public view returns (uint256) {
+    return userShares[owner];
+  }
+
+  function ownerCurrentAssets() public view returns (uint256 assets) {
+    uint256 sh = userShares[owner];
     if (sh == 0) return 0;
     assets = MELLOW_VAULT.previewRedeem(sh);
   }
 
-  function profitOf(address user) external view returns (int256) {
-    uint256 assets = currentAssetsOf(user);
-    uint256 principal = userPrincipal[user];
-    if (assets >= principal) return int256(assets - principal);
-    return -int256(principal - assets);
+  function contributorShareValue(address contributor) external view returns (uint256 wstValue) {
+    uint256 tot = totalContributed;
+    if (tot == 0) return 0;
+    uint256 assets = ownerCurrentAssets();
+    return (assets * contribPrincipal[contributor]) / tot;
   }
 
-  // --- deposits ---
+  // --- deposits (credit owner) ---
 
-  /// ETH in → router swap (ETH→wstETH) → ERC-4626 deposit; receiver = this, user gets internal shares credit.
+  /// ETH → router swap (ETH→wstETH) → ERC-4626 deposit; shares credited to owner.
   function depositETHViaRouter(address router, bytes calldata swapCalldata, uint256 minWstOut) external payable nonReentrant {
     require(isRouterAllowed[router], "ROUTER_NOT_ALLOWED");
     require(msg.value > 0, "ZERO_ETH");
@@ -147,40 +159,52 @@ contract SymbioticLiskETHVaultProxy is Ownable, ReentrancyGuard {
     uint256 wstBefore = WSTETH.balanceOf(address(this));
     (bool ok, ) = router.call{value: msg.value}(swapCalldata);
     require(ok, "ROUTER_CALL_FAIL");
-    uint256 wstAfter = WSTETH.balanceOf(address(this));
-    uint256 bought = wstAfter - wstBefore;
+    uint256 bought = WSTETH.balanceOf(address(this)) - wstBefore;
     require(bought >= minWstOut && bought > 0, "INSUFFICIENT_OUT");
 
     uint256 sharesOut = MELLOW_VAULT.deposit(bought, address(this));
-    userShares[msg.sender] += sharesOut;
-    userPrincipal[msg.sender] += bought;
+    require(sharesOut > 0, "ZERO_SHARES");
 
+    userShares[owner] += sharesOut;
+    userPrincipal[owner] += bought;
+
+    contribPrincipal[msg.sender] += bought;
+    totalContributed += bought;
+
+    emit Contributed(msg.sender, bought, sharesOut);
     emit DepositedETH(msg.sender, router, msg.value, bought, sharesOut);
   }
 
-  /// Direct wstETH deposit (user must approve this contract for `assets` first).
+  /// Direct wstETH deposit (contributor approves this first). Shares credited to owner.
   function depositWstETH(uint256 assets) external nonReentrant {
     require(assets > 0, "ZERO_ASSETS");
     require(WSTETH.transferFrom(msg.sender, address(this), assets), "TRANSFER_IN_FAIL");
     uint256 sharesOut = MELLOW_VAULT.deposit(assets, address(this));
-    userShares[msg.sender] += sharesOut;
-    userPrincipal[msg.sender] += assets;
+    require(sharesOut > 0, "ZERO_SHARES");
+
+    userShares[owner] += sharesOut;
+    userPrincipal[owner] += assets;
+
+    contribPrincipal[msg.sender] += assets;
+    totalContributed += assets;
+
+    emit Contributed(msg.sender, assets, sharesOut);
     emit DepositedWst(msg.sender, assets, sharesOut);
   }
 
-  // --- withdrawals ---
+  // --- withdrawals (owner only) ---
 
-  function withdrawSplitToETH(
+  function ownerWithdrawSplitToETH(
     uint256 sharesToRedeem,
     address router,
     bytes calldata swapCalldata,
     uint256 minEthOut
-  ) external nonReentrant {
+  ) external onlyOwner nonReentrant {
     require(canWithdraw(), "WITHDRAW_LOCKED");
     require(isRouterAllowed[router], "ROUTER_NOT_ALLOWED");
 
-    uint256 userSh = userShares[msg.sender];
-    require(sharesToRedeem > 0 && sharesToRedeem <= userSh, "BAD_SHARE_AMOUNT");
+    uint256 oSh = userShares[owner];
+    require(sharesToRedeem > 0 && sharesToRedeem <= oSh, "BAD_SHARE_AMOUNT");
 
     uint256 wstBefore = WSTETH.balanceOf(address(this));
     uint256 assetsOut = MELLOW_VAULT.redeem(sharesToRedeem, address(this), address(this));
@@ -195,7 +219,7 @@ contract SymbioticLiskETHVaultProxy is Ownable, ReentrancyGuard {
     }
 
     uint256 ethBefore = address(this).balance;
-    (bool ok, ) = router.call{value: 0}(swapCalldata);
+    (bool ok, ) = router.call(swapCalldata); // router spends wstETH and returns ETH/WETH to this
     require(ok, "ROUTER_SWAP_FAIL");
     uint256 ethDelta = address(this).balance - ethBefore;
 
@@ -209,18 +233,19 @@ contract SymbioticLiskETHVaultProxy is Ownable, ReentrancyGuard {
     require(ethDelta >= minEthOut && ethDelta > 0, "INSUFFICIENT_ETH_OUT");
 
     uint256 feePart = (ethDelta * feeBps) / 10_000;
-    uint256 userPart = ethDelta - feePart;
+    uint256 ownerPart = ethDelta - feePart;
 
-    (bool s1, ) = payable(msg.sender).call{value: userPart}("");
-    require(s1, "ETH_USER_FAIL");
-    (bool s2, ) = payable(feeRecipient).call{value: feePart}("");
-    require(s2, "ETH_FEE_FAIL");
+    (bool s1, ) = payable(feeRecipient).call{value: feePart}("");
+    require(s1, "ETH_FEE_FAIL");
+    (bool s2, ) = payable(owner).call{value: ownerPart}("");
+    require(s2, "ETH_OWNER_FAIL");
 
-    uint256 remainingShares = userSh - sharesToRedeem;
-    uint256 principal = userPrincipal[msg.sender];
-    userShares[msg.sender] = remainingShares;
-    userPrincipal[msg.sender] = (remainingShares == 0) ? 0 : (principal * remainingShares) / userSh;
-    emit WithdrawnToETH(msg.sender, sharesToRedeem, userPart, feePart);
+    uint256 remainingShares = oSh - sharesToRedeem;
+    uint256 principal = userPrincipal[owner];
+    userShares[owner] = remainingShares;
+    userPrincipal[owner] = (remainingShares == 0) ? 0 : (principal * remainingShares) / oSh;
+
+    emit WithdrawnToETH(msg.sender, sharesToRedeem, ownerPart, feePart);
   }
 
   receive() external payable {}

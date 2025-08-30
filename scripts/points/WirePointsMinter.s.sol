@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Script} from "../node_modules/forge-std/src/Script.sol";
-import {PointsToken} from "contracts/PointsToken.sol";
+import {Script} from "../../node_modules/forge-std/src/Script.sol";
+import {PointsToken} from "contracts/points/PointsToken.sol";
 
 contract WirePointsMinterScript is Script {
 	function run(address pointsToken, address newMinter) external {

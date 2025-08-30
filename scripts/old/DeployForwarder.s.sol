@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import "forge-std/Script.sol";
+import {Script} from "../../node_modules/forge-std/src/Script.sol";
 import "forge-std/console2.sol";
 import "@openzeppelin/contracts/metatx/ERC2771Forwarder.sol";
 
