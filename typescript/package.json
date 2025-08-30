@@ -1,0 +1,30 @@
+{
+  "name": "monadpay-contracts",
+  "version": "1.0.0",
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^22.17.2",
+    "forge-std": "github:foundry-rs/forge-std#v1.9.4",
+    "typescript": "~5.8.0",
+    "viem": "^2.36.0"
+  },
+  "scripts": {
+    "build": "forge build",
+    "compile": "forge build",
+    "test": "forge test -vvv",
+    "clean": "forge clean",
+    "fmt": "forge fmt",
+    "anvil": "anvil",
+    "base-eth": "bun run baseeth-bridge-stake-restake.ts",
+    "deploy:vault-factory": "forge script ../scripts/DeployVaultProxyFactory.s.sol:DeployVaultFactory --sig 'run(address,address,address)' $WSTETH_ADDRESS $MELLOW_VAULT_ADDRESS $WETH_ADDRESS --rpc-url $LISK_RPC_URL --chain-id 1135 --private-key $PRIVATE_KEY --broadcast -vv --via-ir",
+    "create:vault": "forge script ../scripts/CreateVaultProxy.s.sol:CreateVaultFromFactory --sig 'run(address,address,address,uint256)' $VAULT_FACTORY_ADDRESS $VAULT_OWNER_ADDRESS $VAULT_FEE_RECIPIENT $VAULT_UNLOCK_TIME --rpc-url $LISK_RPC_URL --chain-id 1135 --private-key $PRIVATE_KEY --broadcast -vv --via-ir",
+    "deploy:points": "forge script ../scripts/DeployPointsAndAdmin.s.sol:DeployPointsAndAdminScript --rpc-url $RPC_URL --chain-id 1135 --private-key $PRIVATE_KEY --broadcast",
+    "deploy:forwarder": "forge script ../scripts/DeployForwarder.s.sol --rpc-url $RPC_URL --chain-id 1135 --private-key $PRIVATE_KEY --broadcast"
+  },
+  "dependencies": {
+    "@lifi/sdk": "^3.11.4",
+    "@openzeppelin/contracts": "^5.4.0",
+    "dotenv": "^17.2.1",
+    "ethers": "^6.15.0"
+  }
+}
